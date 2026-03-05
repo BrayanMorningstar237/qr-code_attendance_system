@@ -35,7 +35,7 @@ export default function AdminScreen() {
   const [formData, setFormData] = useState({
     code: "",
     name: "",
-    teacher: "",
+    teacherId: "",      // now store teacher ID
     email: "",
     department: "",
     matricule: "",
@@ -132,7 +132,7 @@ export default function AdminScreen() {
     setFormData({
       code: "",
       name: "",
-      teacher: "",
+      teacherId: "",
       email: "",
       department: "",
       matricule: "",
@@ -148,7 +148,7 @@ export default function AdminScreen() {
       setFormData({
         code: item.code || "",
         name: item.name || "",
-        teacher: item.teacher || "",
+        teacherId: item.teacherId || "",
         email: "",
         department: "",
         matricule: "",
@@ -157,7 +157,7 @@ export default function AdminScreen() {
       setFormData({
         code: "",
         name: item.name || "",
-        teacher: "",
+        teacherId: "",
         email: item.email || "",
         department: item.department || "",
         matricule: "",
@@ -166,7 +166,7 @@ export default function AdminScreen() {
       setFormData({
         code: "",
         name: item.name || "",
-        teacher: "",
+        teacherId: "",
         email: item.email || "",
         department: "",
         matricule: item.matricule || "",
@@ -206,7 +206,7 @@ export default function AdminScreen() {
     if (activeTab === "courses") {
       if (!formData.code) newErrors.code = true;
       if (!formData.name) newErrors.name = true;
-      if (!formData.teacher) newErrors.teacher = true;
+      if (!formData.teacherId) newErrors.teacherId = true;
     } else if (activeTab === "teachers") {
       if (!formData.name) newErrors.name = true;
     } else if (activeTab === "students") {
@@ -218,117 +218,121 @@ export default function AdminScreen() {
   };
 
   const handleSave = async () => {
-  console.log("Saving form for tab:", activeTab, "editing:", !!editingItem);
+    console.log("Saving form for tab:", activeTab, "editing:", !!editingItem);
 
-  if (!validateForm()) {
-    console.log("Validation failed, errors:", errors);
-    Alert.alert("Error", "Please fill all required fields");
-    return;
-  }
-
-  try {
-    if (activeTab === "courses") {
-      const courseData = {
-        code: formData.code,
-        name: formData.name,
-        teacher: formData.teacher,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      };
-
-      if (editingItem) {
-        console.log("Updating course:", editingItem.id);
-        await db.collection("courses").doc(editingItem.id).update(courseData);
-        console.log("Course updated successfully");
-      } else {
-        console.log("Adding new course");
-        await db.collection("courses").add({
-          ...courseData,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        });
-        console.log("Course added successfully");
-      }
-    } else if (activeTab === "teachers") {
-      if (!formData.name) {
-        Alert.alert("Error", "Name is required");
-        return;
-      }
-      const teacherData: any = {
-        name: formData.name,
-        department: formData.department || "",
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      };
-
-      if (editingItem) {
-        const oldName = editingItem.name; // get the current name before update
-        console.log(`Updating teacher: ${oldName} → ${formData.name}`);
-
-        // 1. Update the teacher document itself
-        await db.collection("users").doc(editingItem.id).update(teacherData);
-        console.log("Teacher updated successfully");
-
-        // 2. If the name changed, update all courses that have this teacher
-        if (oldName !== formData.name) {
-          console.log(`Teacher name changed, updating courses from "${oldName}" to "${formData.name}"`);
-          const coursesSnapshot = await db.collection("courses").where("teacher", "==", oldName).get();
-          if (!coursesSnapshot.empty) {
-            const batch = db.batch();
-            coursesSnapshot.docs.forEach((doc) => {
-              batch.update(doc.ref, { teacher: formData.name });
-            });
-            await batch.commit();
-            console.log(`Updated ${coursesSnapshot.size} courses with new teacher name`);
-          } else {
-            console.log("No courses found with this teacher");
-          }
-        }
-      } else {
-        Alert.alert("Info", "Please use the signup screen to create new teachers.");
-        setModalVisible(false);
-        return;
-      }
-    } else if (activeTab === "students") {
-      if (!formData.name || !formData.matricule) {
-        Alert.alert("Error", "Name and matricule are required");
-        return;
-      }
-      const studentData: any = {
-        name: formData.name,
-        matricule: formData.matricule,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      };
-      if (editingItem) {
-        console.log("Updating student:", editingItem.id);
-        await db.collection("users").doc(editingItem.id).update(studentData);
-        console.log("Student updated successfully");
-      } else {
-        Alert.alert("Info", "Please use the signup screen to create new students.");
-        setModalVisible(false);
-        return;
-      }
+    if (!validateForm()) {
+      console.log("Validation failed, errors:", errors);
+      Alert.alert("Error", "Please fill all required fields");
+      return;
     }
-    setModalVisible(false);
-  } catch (error) {
-    console.error("Error saving:", error);
-    Alert.alert("Error", "Failed to save data");
-  }
-};
 
-  const renderCourseItem = ({ item }: any) => (
-    <View style={styles.listItem}>
-      <View style={styles.itemInfo}>
-        <Text style={styles.itemTitle}>{item.code} - {item.name}</Text>
-        <Text style={styles.itemSubtitle}>Teacher: {item.teacher}</Text>
+    try {
+      if (activeTab === "courses") {
+        // Get the selected teacher's name for display (optional)
+        const selectedTeacher = teachers.find(t => t.id === formData.teacherId);
+        const courseData = {
+          code: formData.code,
+          name: formData.name,
+          teacherId: formData.teacherId,
+          teacherName: selectedTeacher?.name || "", // store teacher name for easy display
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (editingItem) {
+          console.log("Updating course:", editingItem.id);
+          await db.collection("courses").doc(editingItem.id).update(courseData);
+          console.log("Course updated successfully");
+        } else {
+          console.log("Adding new course");
+          await db.collection("courses").add({
+            ...courseData,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          });
+          console.log("Course added successfully");
+        }
+      } else if (activeTab === "teachers") {
+        if (!formData.name) {
+          Alert.alert("Error", "Name is required");
+          return;
+        }
+        const teacherData: any = {
+          name: formData.name,
+          department: formData.department || "",
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (editingItem) {
+          const oldName = editingItem.name;
+          console.log(`Updating teacher: ${oldName} → ${formData.name}`);
+
+          await db.collection("users").doc(editingItem.id).update(teacherData);
+          console.log("Teacher updated successfully");
+
+          // If name changed, update all courses that have this teacherId with the new teacherName
+          if (oldName !== formData.name) {
+            console.log(`Teacher name changed, updating courses taught by ${editingItem.id}`);
+            const coursesSnapshot = await db.collection("courses").where("teacherId", "==", editingItem.id).get();
+            if (!coursesSnapshot.empty) {
+              const batch = db.batch();
+              coursesSnapshot.docs.forEach((doc) => {
+                batch.update(doc.ref, { teacherName: formData.name });
+              });
+              await batch.commit();
+              console.log(`Updated ${coursesSnapshot.size} courses with new teacher name`);
+            }
+          }
+        } else {
+          Alert.alert("Info", "Please use the signup screen to create new teachers.");
+          setModalVisible(false);
+          return;
+        }
+      } else if (activeTab === "students") {
+        if (!formData.name || !formData.matricule) {
+          Alert.alert("Error", "Name and matricule are required");
+          return;
+        }
+        const studentData: any = {
+          name: formData.name,
+          matricule: formData.matricule,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        };
+        if (editingItem) {
+          console.log("Updating student:", editingItem.id);
+          await db.collection("users").doc(editingItem.id).update(studentData);
+          console.log("Student updated successfully");
+        } else {
+          Alert.alert("Info", "Please use the signup screen to create new students.");
+          setModalVisible(false);
+          return;
+        }
+      }
+      setModalVisible(false);
+    } catch (error) {
+      console.error("Error saving:", error);
+      Alert.alert("Error", "Failed to save data");
+    }
+  };
+
+  const renderCourseItem = ({ item }: any) => {
+    // Display teacher name from stored teacherName or look up in teachers list
+    const teacherDisplay = item.teacherName || (teachers.find(t => t.id === item.teacherId)?.name) || "Unknown";
+    return (
+      <View style={styles.listItem}>
+        <View style={styles.itemInfo}>
+          <Text style={styles.itemTitle}>{item.code} - {item.name}</Text>
+          <Text style={styles.itemSubtitle}>Teacher: {teacherDisplay}</Text>
+        </View>
+        <View style={styles.itemActions}>
+          <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionButton}>
+            <Ionicons name="create-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionButton}>
+            <Ionicons name="trash-outline" size={20} color="#dc3545" />
+          </TouchableOpacity>
+        </View>
       </View>
-      <View style={styles.itemActions}>
-        <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionButton}>
-          <Ionicons name="create-outline" size={20} color="#007AFF" />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionButton}>
-          <Ionicons name="trash-outline" size={20} color="#dc3545" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    );
+  };
 
   const renderTeacherItem = ({ item }: any) => (
     <View style={styles.listItem}>
@@ -460,17 +464,23 @@ export default function AdminScreen() {
                   value={formData.name}
                   onChangeText={(t) => setFormData({ ...formData, name: t })}
                 />
-                <View style={[styles.pickerContainer, errors.teacher && styles.errorPicker]}>
-                  <Picker
-                    selectedValue={formData.teacher}
-                    onValueChange={(itemValue) => setFormData({ ...formData, teacher: itemValue })}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Select a teacher" value="" />
-                    {teachers.map((teacher) => (
-                      <Picker.Item key={teacher.id} label={teacher.name} value={teacher.name} />
-                    ))}
-                  </Picker>
+                <View style={[styles.pickerContainer, errors.teacherId && styles.errorPicker]}>
+                  {teachers.length > 0 ? (
+                    <Picker
+                      selectedValue={formData.teacherId}
+                      onValueChange={(itemValue) => setFormData({ ...formData, teacherId: itemValue })}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Select a teacher" value="" />
+                      {teachers.map((teacher) => (
+                        <Picker.Item key={teacher.id} label={teacher.name} value={teacher.id} />
+                      ))}
+                    </Picker>
+                  ) : (
+                    <View style={styles.pickerPlaceholder}>
+                      <Text style={styles.pickerPlaceholderText}>No teachers available</Text>
+                    </View>
+                  )}
                 </View>
               </>
             )}
@@ -674,6 +684,8 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
     overflow: "hidden",
     marginBottom: 16,
+    minHeight: 50,
+    justifyContent: "center",
   },
   errorPicker: {
     borderColor: "#dc3545",
@@ -682,6 +694,14 @@ const styles = StyleSheet.create({
   picker: {
     height: 50,
     width: "100%",
+  },
+  pickerPlaceholder: {
+    height: 50,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pickerPlaceholderText: {
+    color: "#999",
   },
   modalActions: {
     flexDirection: "row",

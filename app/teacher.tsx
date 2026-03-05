@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from 'expo-file-system';
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
@@ -22,18 +22,27 @@ import {
 import QRCode from "react-native-qrcode-svg";
 import { auth, db } from "../firebase";
 
+// Type definitions
+type Course = {
+  id: string;
+  code: string;
+  name: string;
+  teacherId: string;
+};
+
 type Session = {
   id: string;
   courseCode: string;
   dateTime: string;
   duration: number;
   location: any;
-  attendees?: number; // we'll compute this from attendance collection later
+  teacherId: string;
+  createdAt: any;
 };
 
 export default function TeacherScreen() {
   const router = useRouter();
-  const qrCodeRef = useRef<any>();
+  const qrCodeRef = useRef<any>(null);
 
   // Form states
   const [selectedCourse, setSelectedCourse] = useState("");
@@ -54,7 +63,7 @@ export default function TeacherScreen() {
   const [isGettingLocation, setIsGettingLocation] = useState(false);
 
   // Courses assigned to teacher
-  const [courses, setCourses] = useState<any[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
 
   // Sessions history
@@ -79,7 +88,7 @@ export default function TeacherScreen() {
         const coursesData = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
-        }));
+        })) as Course[];
         console.log(`Fetched ${coursesData.length} courses`);
         setCourses(coursesData);
         if (coursesData.length > 0) {
@@ -110,9 +119,9 @@ export default function TeacherScreen() {
       const sessionsData = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
-      }));
+      })) as Session[];
       console.log(`Fetched ${sessionsData.length} sessions`);
-      setSessions(sessionsData as Session[]);
+      setSessions(sessionsData);
     } catch (error) {
       console.error("Error fetching sessions:", error);
       Alert.alert("Error", "Failed to load session history");
@@ -226,41 +235,42 @@ export default function TeacherScreen() {
   };
 
   // Share QR code image
-  const shareQR = async () => {
-    if (!qrValue || !qrCodeRef.current) {
-      Alert.alert("Error", "No QR code to share");
-      return;
-    }
+  // Share QR code image
+const shareQR = async () => {
+  if (!qrValue || !qrCodeRef.current) {
+    Alert.alert("Error", "No QR code to share");
+    return;
+  }
 
-    try {
-      // Capture the QR code as an image
-      qrCodeRef.current.toDataURL(async (dataURL: string) => {
-        const base64Data = dataURL.replace(/^data:image\/png;base64,/, "");
-        const fileUri = FileSystem.documentDirectory + `qr_${Date.now()}.png`;
-        await FileSystem.writeAsStringAsync(fileUri, base64Data, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri);
-        } else {
-          Alert.alert("Sharing not available", "Cannot share on this device");
-        }
+  try {
+    qrCodeRef.current.toDataURL(async (dataURL: string) => {
+      const base64Data = dataURL.replace(/^data:image\/png;base64,/, "");
+      // Use type assertion to bypass TypeScript errors
+      const fileUri = (FileSystem as any).documentDirectory + `qr_${Date.now()}.png`;
+      await (FileSystem as any).writeAsStringAsync(fileUri, base64Data, {
+        encoding: (FileSystem as any).EncodingType.Base64,
       });
-    } catch (error) {
-      console.error("Error sharing QR:", error);
-      Alert.alert("Error", "Failed to share QR code");
-    }
-  };
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri);
+      } else {
+        Alert.alert("Sharing not available", "Cannot share on this device");
+      }
+    });
+  } catch (error) {
+    console.error("Error sharing QR:", error);
+    Alert.alert("Error", "Failed to share QR code");
+  }
+};
 
   const renderSessionItem = ({ item }: { item: Session }) => (
     <View style={styles.sessionItem}>
       <View style={styles.sessionHeader}>
         <Text style={styles.sessionCourse}>{item.courseCode}</Text>
-        <Text style={styles.sessionAttendees}>{item.attendees || 0} students</Text>
+        {/* Temporarily removed attendees count */}
       </View>
       <Text style={styles.sessionDetails}>
-        {item.dateTime} • {item.location.address || item.location.name || "Unknown location"}
+        {item.dateTime} • {item.location?.address || item.location?.name || "Unknown location"}
       </Text>
     </View>
   );
@@ -709,11 +719,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#333",
-  },
-  sessionAttendees: {
-    fontSize: 14,
-    color: "#28a745",
-    fontWeight: "500",
   },
   sessionDetails: {
     fontSize: 14,
