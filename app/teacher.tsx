@@ -175,64 +175,89 @@ export default function TeacherScreen() {
 
   // Generate QR and save session
   const generateQr = async () => {
-    if (!selectedCourse || !dateTime || !duration) {
-      Alert.alert("Error", "Please fill all required fields");
-      return;
-    }
-    if (!useCurrentLocation && !manualLocation) {
-      Alert.alert("Error", "Please enter a location or use current location");
-      return;
-    }
+  console.log("=== Starting QR generation ===");
+  console.log("Input values:", {
+    selectedCourse,
+    dateTime,
+    duration,
+    useCurrentLocation,
+    manualLocation,
+    radius,
+    currentLocation,
+  });
 
-    // Build location data
-    let locationData;
-    if (useCurrentLocation && currentLocation) {
-      locationData = {
-        type: "gps",
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        radius: parseInt(radius) || 100,
-        address: currentLocation.address,
-      };
-    } else {
-      locationData = {
-        type: "manual",
-        name: manualLocation,
-        radius: parseInt(radius) || 100,
-      };
-    }
+  // Validation
+  if (!selectedCourse || !dateTime || !duration) {
+    console.log("Validation failed: missing required fields");
+    Alert.alert("Error", "Please fill all required fields");
+    return;
+  }
+  if (!useCurrentLocation && !manualLocation) {
+    console.log("Validation failed: no location provided");
+    Alert.alert("Error", "Please enter a location or use current location");
+    return;
+  }
 
-    const user = auth.currentUser;
-    if (!user) {
-      Alert.alert("Error", "You must be logged in");
-      return;
-    }
-
-    const sessionData = {
-      courseCode: selectedCourse,
-      dateTime,
-      duration: parseInt(duration),
-      location: locationData,
-      teacherId: user.uid,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  // Build location data
+  let locationData;
+  if (useCurrentLocation && currentLocation) {
+    locationData = {
+      type: "gps",
+      latitude: currentLocation.latitude,
+      longitude: currentLocation.longitude,
+      radius: parseInt(radius) || 100,
+      address: currentLocation.address,
     };
+    console.log("Using GPS location:", locationData);
+  } else {
+    locationData = {
+      type: "manual",
+      name: manualLocation,
+      radius: parseInt(radius) || 100,
+    };
+    console.log("Using manual location:", locationData);
+  }
 
-    try {
-      console.log("Saving session to Firestore...");
-      const docRef = await db.collection("sessions").add(sessionData);
-      console.log("Session saved with ID:", docRef.id);
+  const user = auth.currentUser;
+  if (!user) {
+    console.log("No authenticated user");
+    Alert.alert("Error", "You must be logged in");
+    return;
+  }
+  console.log("Current user UID:", user.uid);
 
-      // Include session ID in QR payload
-      const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
-      setQrValue(qrPayload);
-
-      // Refresh sessions list
-      fetchSessions();
-    } catch (error) {
-      console.error("Error saving session:", error);
-      Alert.alert("Error", "Failed to save session");
-    }
+  const sessionData = {
+    courseCode: selectedCourse,
+    dateTime,
+    duration: parseInt(duration),
+    location: locationData,
+    teacherId: user.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
   };
+  console.log("Session data to save:", sessionData);
+
+  try {
+    console.log("Attempting to save session to Firestore...");
+    const docRef = await db.collection("sessions").add(sessionData);
+    console.log("✅ Session saved successfully with ID:", docRef.id);
+
+    // Include session ID in QR payload
+    const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
+    setQrValue(qrPayload);
+    console.log("QR payload generated");
+
+    // Refresh sessions list
+    fetchSessions();
+  } catch (error: any) {
+    console.error("🔥 Firestore add error:", {
+      code: error.code,
+      message: error.message,
+      stack: error.stack,
+    });
+    Alert.alert("Error", `Failed to save session: ${error.message}`);
+  }
+  console.log("=== QR generation finished ===");
+};
 
   // Share QR code image
   // Share QR code image
