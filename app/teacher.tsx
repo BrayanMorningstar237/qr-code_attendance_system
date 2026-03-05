@@ -5,6 +5,8 @@ import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import firebase from "firebase/compat/app";
+import { Platform } from 'react-native'; // add at top with other imports
+
 import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
@@ -260,7 +262,7 @@ export default function TeacherScreen() {
 };
 
   // Share QR code image
-  // Share QR code image
+
 const shareQR = async () => {
   if (!qrValue || !qrCodeRef.current) {
     Alert.alert("Error", "No QR code to share");
@@ -270,17 +272,54 @@ const shareQR = async () => {
   try {
     qrCodeRef.current.toDataURL(async (dataURL: string) => {
       const base64Data = dataURL.replace(/^data:image\/png;base64,/, "");
-      // Use type assertion to bypass TypeScript errors
-      const fileUri = (FileSystem as any).documentDirectory + `qr_${Date.now()}.png`;
-      await (FileSystem as any).writeAsStringAsync(fileUri, base64Data, {
-        encoding: (FileSystem as any).EncodingType.Base64,
-      });
 
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(fileUri);
-      } else {
-        Alert.alert("Sharing not available", "Cannot share on this device");
+      // Native platform (iOS/Android)
+      if (Platform.OS !== 'web') {
+        const fs = FileSystem as any;
+        if (!fs.documentDirectory) {
+          Alert.alert("Error", "Cannot access file system");
+          return;
+        }
+
+        const fileUri = fs.documentDirectory + `qr_${Date.now()}.png`;
+        await fs.writeAsStringAsync(fileUri, base64Data, {
+          encoding: fs.EncodingType?.Base64 || 'base64',
+        });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri);
+        } else {
+          Alert.alert("Sharing not available", "Cannot share on this device");
+        }
+        return;
       }
+
+      // Web platform
+      // Try Web Share API first
+      const blob = await (await fetch(dataURL)).blob();
+      const file = new File([blob], `qr_${Date.now()}.png`, { type: 'image/png' });
+
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'Attendance QR Code',
+            text: 'Scan this QR code to mark attendance',
+          });
+          return;
+        } catch (shareError) {
+          console.log('Web share failed, falling back to download', shareError);
+        }
+      }
+
+      // Fallback: download the image
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = `qr_${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      Alert.alert("Success", "QR code downloaded");
     });
   } catch (error) {
     console.error("Error sharing QR:", error);
