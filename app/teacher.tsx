@@ -2,16 +2,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
 import * as FileSystem from 'expo-file-system';
 import * as Location from "expo-location";
+import * as MediaLibrary from 'expo-media-library';
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import firebase from "firebase/compat/app";
-import { Platform } from 'react-native'; // add at top with other imports
-
 import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Platform,
     RefreshControl,
     SafeAreaView,
     ScrollView,
@@ -22,6 +22,7 @@ import {
     View,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
+import ViewShot from "react-native-view-shot";
 import { auth, db } from "../firebase";
 
 // Type definitions
@@ -45,6 +46,7 @@ type Session = {
 export default function TeacherScreen() {
   const router = useRouter();
   const qrCodeRef = useRef<any>(null);
+  const viewShotRef = useRef<any>(null);
 
   // Form states
   const [selectedCourse, setSelectedCourse] = useState("");
@@ -177,153 +179,231 @@ export default function TeacherScreen() {
 
   // Generate QR and save session
   const generateQr = async () => {
-  console.log("=== Starting QR generation ===");
-  console.log("Input values:", {
-    selectedCourse,
-    dateTime,
-    duration,
-    useCurrentLocation,
-    manualLocation,
-    radius,
-    currentLocation,
-  });
-
-  // Validation
-  if (!selectedCourse || !dateTime || !duration) {
-    console.log("Validation failed: missing required fields");
-    Alert.alert("Error", "Please fill all required fields");
-    return;
-  }
-  if (!useCurrentLocation && !manualLocation) {
-    console.log("Validation failed: no location provided");
-    Alert.alert("Error", "Please enter a location or use current location");
-    return;
-  }
-
-  // Build location data
-  let locationData;
-  if (useCurrentLocation && currentLocation) {
-    locationData = {
-      type: "gps",
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude,
-      radius: parseInt(radius) || 100,
-      address: currentLocation.address,
-    };
-    console.log("Using GPS location:", locationData);
-  } else {
-    locationData = {
-      type: "manual",
-      name: manualLocation,
-      radius: parseInt(radius) || 100,
-    };
-    console.log("Using manual location:", locationData);
-  }
-
-  const user = auth.currentUser;
-  if (!user) {
-    console.log("No authenticated user");
-    Alert.alert("Error", "You must be logged in");
-    return;
-  }
-  console.log("Current user UID:", user.uid);
-
-  const sessionData = {
-    courseCode: selectedCourse,
-    dateTime,
-    duration: parseInt(duration),
-    location: locationData,
-    teacherId: user.uid,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-  };
-  console.log("Session data to save:", sessionData);
-
-  try {
-    console.log("Attempting to save session to Firestore...");
-    const docRef = await db.collection("sessions").add(sessionData);
-    console.log("✅ Session saved successfully with ID:", docRef.id);
-
-    // Include session ID in QR payload
-    const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
-    setQrValue(qrPayload);
-    console.log("QR payload generated");
-
-    // Refresh sessions list
-    fetchSessions();
-  } catch (error: any) {
-    console.error("🔥 Firestore add error:", {
-      code: error.code,
-      message: error.message,
-      stack: error.stack,
+    console.log("=== Starting QR generation ===");
+    console.log("Input values:", {
+      selectedCourse,
+      dateTime,
+      duration,
+      useCurrentLocation,
+      manualLocation,
+      radius,
+      currentLocation,
     });
-    Alert.alert("Error", `Failed to save session: ${error.message}`);
-  }
-  console.log("=== QR generation finished ===");
-};
 
-  // Share QR code image
+    if (!selectedCourse || !dateTime || !duration) {
+      console.log("Validation failed: missing required fields");
+      Alert.alert("Error", "Please fill all required fields");
+      return;
+    }
+    if (!useCurrentLocation && !manualLocation) {
+      console.log("Validation failed: no location provided");
+      Alert.alert("Error", "Please enter a location or use current location");
+      return;
+    }
 
-const shareQR = async () => {
-  if (!qrValue || !qrCodeRef.current) {
-    Alert.alert("Error", "No QR code to share");
-    return;
-  }
+    let locationData;
+    if (useCurrentLocation && currentLocation) {
+      locationData = {
+        type: "gps",
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        radius: parseInt(radius) || 100,
+        address: currentLocation.address,
+      };
+      console.log("Using GPS location:", locationData);
+    } else {
+      locationData = {
+        type: "manual",
+        name: manualLocation,
+        radius: parseInt(radius) || 100,
+      };
+      console.log("Using manual location:", locationData);
+    }
 
-  try {
-    qrCodeRef.current.toDataURL(async (dataURL: string) => {
-      const base64Data = dataURL.replace(/^data:image\/png;base64,/, "");
+    const user = auth.currentUser;
+    if (!user) {
+      console.log("No authenticated user");
+      Alert.alert("Error", "You must be logged in");
+      return;
+    }
+    console.log("Current user UID:", user.uid);
 
-      // Native platform (iOS/Android)
-      if (Platform.OS !== 'web') {
-        const fs = FileSystem as any;
-        if (!fs.documentDirectory) {
-          Alert.alert("Error", "Cannot access file system");
+    const sessionData = {
+      courseCode: selectedCourse,
+      dateTime,
+      duration: parseInt(duration),
+      location: locationData,
+      teacherId: user.uid,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    console.log("Session data to save:", sessionData);
+
+    try {
+      console.log("Attempting to save session to Firestore...");
+      const docRef = await db.collection("sessions").add(sessionData);
+      console.log("✅ Session saved successfully with ID:", docRef.id);
+
+      const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
+      setQrValue(qrPayload);
+      console.log("QR payload generated");
+
+      fetchSessions();
+    } catch (error: any) {
+      console.error("🔥 Firestore add error:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack,
+      });
+      Alert.alert("Error", `Failed to save session: ${error.message}`);
+    }
+    console.log("=== QR generation finished ===");
+  };
+
+  // Share QR code image (existing)
+  const shareQR = async () => {
+    if (!qrValue || !qrCodeRef.current) {
+      Alert.alert("Error", "No QR code to share");
+      return;
+    }
+
+    try {
+      qrCodeRef.current.toDataURL(async (dataURL: string) => {
+        const base64Data = dataURL.replace(/^data:image\/png;base64,/, "");
+
+        if (Platform.OS !== 'web') {
+          const fs = FileSystem as any;
+          if (!fs.documentDirectory) {
+            Alert.alert("Error", "Cannot access file system");
+            return;
+          }
+
+          const fileUri = fs.documentDirectory + `qr_${Date.now()}.png`;
+          await fs.writeAsStringAsync(fileUri, base64Data, {
+            encoding: fs.EncodingType?.Base64 || 'base64',
+          });
+
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri);
+          } else {
+            Alert.alert("Sharing not available", "Cannot share on this device");
+          }
           return;
         }
 
-        const fileUri = fs.documentDirectory + `qr_${Date.now()}.png`;
-        await fs.writeAsStringAsync(fileUri, base64Data, {
-          encoding: fs.EncodingType?.Base64 || 'base64',
-        });
+        // Web platform
+        const blob = await (await fetch(dataURL)).blob();
+        const file = new File([blob], `qr_${Date.now()}.png`, { type: 'image/png' });
 
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri);
-        } else {
-          Alert.alert("Sharing not available", "Cannot share on this device");
+        if (navigator.share && navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({
+              files: [file],
+              title: 'Attendance QR Code',
+              text: 'Scan this QR code to mark attendance',
+            });
+            return;
+          } catch (shareError) {
+            console.log('Web share failed, falling back to download', shareError);
+          }
         }
+
+        const link = document.createElement('a');
+        link.href = dataURL;
+        link.download = `qr_${Date.now()}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        Alert.alert("Success", "QR code downloaded");
+      });
+    } catch (error) {
+      console.error("Error sharing QR:", error);
+      Alert.alert("Error", "Failed to share QR code");
+    }
+  };
+
+  // Helper to get QR as data URL
+  const captureQRAsDataURL = (): Promise<string> => {
+    return new Promise((resolve) => {
+      if (qrCodeRef.current) {
+        qrCodeRef.current.toDataURL(resolve);
+      } else {
+        resolve('');
+      }
+    });
+  };
+
+  // Download image with QR and details
+  const downloadImage = async () => {
+  if (!qrValue || !viewShotRef.current) {
+    Alert.alert("Error", "No QR code to download");
+    return;
+  }
+
+  try {
+    if (Platform.OS !== 'web') {
+      // Native: capture the view and save to gallery
+      const uri = await viewShotRef.current.capture();
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (permission.granted) {
+        await MediaLibrary.saveToLibraryAsync(uri);
+        Alert.alert("Success", "Image saved to gallery");
+      } else {
+        Alert.alert("Permission denied", "Cannot save image");
+      }
+    } else {
+      // Web: create a canvas with QR and text, then download
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        Alert.alert("Error", "Could not create canvas context");
         return;
       }
+      canvas.width = 400;
+      canvas.height = 500;
 
-      // Web platform
-      // Try Web Share API first
-      const blob = await (await fetch(dataURL)).blob();
-      const file = new File([blob], `qr_${Date.now()}.png`, { type: 'image/png' });
+      // White background
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      if (navigator.share && navigator.canShare?.({ files: [file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: 'Attendance QR Code',
-            text: 'Scan this QR code to mark attendance',
-          });
-          return;
-        } catch (shareError) {
-          console.log('Web share failed, falling back to download', shareError);
-        }
-      }
+      // Draw text
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 16px Arial';
+      ctx.fillText('Attendance QR Code', 20, 30);
+      ctx.font = '14px Arial';
+      ctx.fillText(`Course: ${selectedCourse}`, 20, 60);
+      ctx.fillText(`Date & Time: ${dateTime}`, 20, 90);
+      ctx.fillText(`Duration: ${duration} min`, 20, 120);
+      const locationText = `Location: ${
+        useCurrentLocation && currentLocation
+          ? currentLocation.address
+          : manualLocation || 'Not specified'
+      }`;
+      ctx.fillText(locationText, 20, 150);
+      ctx.fillStyle = '#dc3545';
+      ctx.font = 'italic 12px Arial';
+      ctx.fillText(`* Valid only during session time and within ${radius}m.`, 20, 180);
 
-      // Fallback: download the image
+      // Draw QR image
+      const qrImage = new Image();
+      const qrDataUrl = await captureQRAsDataURL();
+      qrImage.src = qrDataUrl;
+      await new Promise((resolve) => {
+        qrImage.onload = () => {
+          ctx.drawImage(qrImage, 100, 200, 200, 200);
+          resolve(null);
+        };
+      });
+
+      // Download
       const link = document.createElement('a');
-      link.href = dataURL;
       link.download = `qr_${Date.now()}.png`;
-      document.body.appendChild(link);
+      link.href = canvas.toDataURL('image/png');
       link.click();
-      document.body.removeChild(link);
-      Alert.alert("Success", "QR code downloaded");
-    });
+      Alert.alert("Success", "Image downloaded");
+    }
   } catch (error) {
-    console.error("Error sharing QR:", error);
-    Alert.alert("Error", "Failed to share QR code");
+    console.error("Error downloading image:", error);
+    Alert.alert("Error", "Failed to download image");
   }
 };
 
@@ -331,13 +411,34 @@ const shareQR = async () => {
     <View style={styles.sessionItem}>
       <View style={styles.sessionHeader}>
         <Text style={styles.sessionCourse}>{item.courseCode}</Text>
-        {/* Temporarily removed attendees count */}
       </View>
       <Text style={styles.sessionDetails}>
         {item.dateTime} • {item.location?.address || item.location?.name || "Unknown location"}
       </Text>
     </View>
   );
+
+  // Custom view containing QR and details for capture
+  const InfoImageView = () => {
+    if (!qrValue) return null;
+    return (
+      <View style={styles.infoImageContainer}>
+        <QRCode value={qrValue} size={180} />
+        <View style={styles.infoTextContainer}>
+          <Text style={styles.infoTitle}>Attendance QR Code</Text>
+          <Text style={styles.infoText}>Course: {selectedCourse}</Text>
+          <Text style={styles.infoText}>Date & Time: {dateTime}</Text>
+          <Text style={styles.infoText}>Duration: {duration} minutes</Text>
+          <Text style={styles.infoText}>
+            Location: {useCurrentLocation && currentLocation ? currentLocation.address : manualLocation}
+          </Text>
+          <Text style={styles.infoCondition}>
+            * Valid only during the scheduled time and within {radius}m of the location.
+          </Text>
+        </View>
+      </View>
+    );
+  };
 
   if (loadingCourses) {
     return (
@@ -352,8 +453,8 @@ const shareQR = async () => {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#333" />
-          </TouchableOpacity>
+  <Ionicons name="arrow-back" size={24} color="#333" />
+</TouchableOpacity>
           <Text style={styles.headerTitle}>Teacher Dashboard</Text>
           <View style={{ width: 24 }} />
         </View>
@@ -383,7 +484,6 @@ const shareQR = async () => {
         <View style={styles.formCard}>
           <Text style={styles.formTitle}>Generate New QR</Text>
 
-          {/* Course Picker */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Course</Text>
             <View style={styles.pickerContainer}>
@@ -507,17 +607,21 @@ const shareQR = async () => {
           </TouchableOpacity>
 
           {qrValue ? (
-            <View style={styles.qrContainer}>
-              <Text style={styles.qrLabel}>Scan this QR:</Text>
-              <QRCode
-                value={qrValue}
-                size={200}
-                getRef={(ref) => (qrCodeRef.current = ref)}
-              />
-              <TouchableOpacity style={styles.shareButton} onPress={shareQR}>
-                <Ionicons name="share-outline" size={20} color="#fff" />
-                <Text style={styles.shareButtonText}>Share QR Code</Text>
-              </TouchableOpacity>
+            <View>
+              <Text style={styles.qrLabel}>QR Code with Details:</Text>
+              <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 0.9 }}>
+                <InfoImageView />
+              </ViewShot>
+              <View style={styles.buttonRow}>
+                <TouchableOpacity style={styles.shareButton} onPress={shareQR}>
+                  <Ionicons name="share-outline" size={20} color="#fff" />
+                  <Text style={styles.shareButtonText}>Share</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.downloadButton} onPress={downloadImage}>
+                  <Ionicons name="download-outline" size={20} color="#fff" />
+                  <Text style={styles.downloadButtonText}>Download</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : null}
         </View>
@@ -722,33 +826,76 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
-  qrContainer: {
-    alignItems: "center",
-    marginTop: 24,
-    padding: 16,
-    backgroundColor: "#f9f9f9",
-    borderRadius: 12,
-  },
   qrLabel: {
     fontSize: 16,
-    marginBottom: 12,
+    marginTop: 16,
+    marginBottom: 8,
     color: "#333",
+    textAlign: "center",
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 16,
+    width: '100%',
   },
   shareButton: {
-    backgroundColor: "#34C759",
+    backgroundColor: '#34C759',
     borderRadius: 8,
     padding: 12,
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
     gap: 8,
-    marginTop: 16,
-    width: "100%",
+    flex: 0.45,
   },
   shareButtonText: {
-    color: "#fff",
+    color: '#fff',
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: '600',
+  },
+  downloadButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    flex: 0.45,
+  },
+  downloadButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  infoImageContainer: {
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  infoTextContainer: {
+    marginTop: 12,
+    width: '100%',
+  },
+  infoTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 4,
+  },
+  infoCondition: {
+    fontSize: 12,
+    color: '#dc3545',
+    fontStyle: 'italic',
+    marginTop: 8,
+    textAlign: 'center',
   },
   historySection: {
     paddingHorizontal: 16,
