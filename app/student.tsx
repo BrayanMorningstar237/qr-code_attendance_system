@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from '@react-navigation/native'; // added for back button
+import { useNavigation } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -57,7 +57,7 @@ type Attendance = {
 
 export default function StudentScreen() {
   const router = useRouter();
-  const navigation = useNavigation(); // added
+  const navigation = useNavigation();
   const [activeTab, setActiveTab] = useState<Tab>("mycourses");
   const [loading, setLoading] = useState(false);
 
@@ -81,6 +81,17 @@ export default function StudentScreen() {
 
   // Attendance stats per course
   const [courseStats, setCourseStats] = useState<Map<string, { attended: number; total: number }>>(new Map());
+
+  // Logout handler
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+      router.replace('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout');
+    }
+  };
 
   // Request permissions on mount
   useEffect(() => {
@@ -585,7 +596,9 @@ export default function StudentScreen() {
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Student Dashboard</Text>
-        <View style={{ width: 24 }} />
+        <TouchableOpacity onPress={handleLogout}>
+          <Ionicons name="exit-outline" size={24} color="#FF3B30" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.tabBar}>

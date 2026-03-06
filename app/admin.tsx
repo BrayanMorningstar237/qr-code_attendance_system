@@ -1,26 +1,28 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
+import { useNavigation } from '@react-navigation/native'; // added
 import { useRouter } from "expo-router";
 import firebase from "firebase/compat/app";
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Modal,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { db } from "../firebase";
+import { auth, db } from "../firebase"; // added auth
 
 type Tab = "courses" | "teachers" | "students";
 
 export default function AdminScreen() {
   const router = useRouter();
+  const navigation = useNavigation(); // added
   const [activeTab, setActiveTab] = useState<Tab>("courses");
   const [modalVisible, setModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -43,6 +45,17 @@ export default function AdminScreen() {
 
   // Validation errors
   const [errors, setErrors] = useState<{ [key: string]: boolean }>({});
+
+  // Logout handler
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+      router.replace('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout');
+    }
+  };
 
   // Fetch data based on active tab
   useEffect(() => {
@@ -408,13 +421,26 @@ export default function AdminScreen() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        {/* Updated back button with fallback */}
+        <TouchableOpacity onPress={() => {
+          if (navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            router.replace('/login');
+          }
+        }}>
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Admin Panel</Text>
-        <TouchableOpacity onPress={handleAdd}>
-          <Ionicons name="add" size={28} color="#007AFF" />
-        </TouchableOpacity>
+        {/* Right side: add and logout buttons */}
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={handleAdd} style={{ marginRight: 15 }}>
+            <Ionicons name="add" size={28} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLogout}>
+            <Ionicons name="exit-outline" size={24} color="#FF3B30" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Tabs */}
@@ -566,6 +592,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "600",
     color: "#333",
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   tabBar: {
     flexDirection: "row",
