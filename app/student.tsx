@@ -1,19 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
-import { BarCodeScanner } from "expo-barcode-scanner";
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { useRouter } from "expo-router";
 import firebase from "firebase/compat/app";
-import React, { useEffect, useState } from "react";
+import jsQR from 'jsqr';
+import React, { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Platform,
+  Image as RNImage,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { auth, db } from "../firebase";
 
@@ -29,8 +33,8 @@ type Course = {
 type Session = {
   id: string;
   courseCode: string;
-  dateTime: string; // e.g., "2025-03-06 10:00"
-  duration: number; // minutes
+  dateTime: string;
+  duration: number;
   location: {
     type: "gps" | "manual";
     latitude?: number;
@@ -55,10 +59,11 @@ export default function StudentScreen() {
   const [activeTab, setActiveTab] = useState<Tab>("mycourses");
   const [loading, setLoading] = useState(false);
 
-  // Camera permissions
-  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  // Camera permissions and state
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
+  const [showCamera, setShowCamera] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const [scanning, setScanning] = useState(false);
 
   // Location permissions and current position
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
@@ -78,11 +83,6 @@ export default function StudentScreen() {
   // Request permissions on mount
   useEffect(() => {
     (async () => {
-      // Camera permission
-      const { status: cameraStatus } = await BarCodeScanner.requestPermissionsAsync();
-      setHasCameraPermission(cameraStatus === "granted");
-
-      // Location permission
       const { status: locationStatus } = await Location.requestForegroundPermissionsAsync();
       setLocationPermission(locationStatus === "granted");
     })();
@@ -99,13 +99,10 @@ export default function StudentScreen() {
       }
 
       try {
-        // 1. Get student's enrolled courses from user document
         const userDoc = await db.collection("users").doc(user.uid).get();
         const userData = userDoc.data();
         const enrolledIds = userData?.enrolledCourses || [];
-        console.log("Enrolled course IDs:", enrolledIds);
 
-        // 2. Fetch all courses (for browsing)
         const coursesSnapshot = await db.collection("courses").get();
         const allCoursesData = coursesSnapshot.docs.map((doc) => ({
           id: doc.id,
@@ -113,13 +110,11 @@ export default function StudentScreen() {
         })) as Course[];
         setAllCourses(allCoursesData);
 
-        // 3. Fetch only enrolled courses
         if (enrolledIds.length > 0) {
           const enrolledCoursesData = allCoursesData.filter((c) => enrolledIds.includes(c.id));
           setEnrolledCourses(enrolledCoursesData);
         }
 
-        // 4. Fetch attendance records for this student
         const attendanceSnapshot = await db
           .collection("attendance")
           .where("studentId", "==", user.uid)
@@ -130,7 +125,6 @@ export default function StudentScreen() {
         })) as Attendance[];
         setAttendance(attendanceData);
 
-        // 5. Fetch all sessions (to compute totals per course)
         const sessionsSnapshot = await db.collection("sessions").get();
         const sessionsData = sessionsSnapshot.docs.map((doc) => ({
           id: doc.id,
@@ -138,7 +132,6 @@ export default function StudentScreen() {
         })) as Session[];
         setSessions(sessionsData);
 
-        // 6. Compute stats per course
         const stats = new Map<string, { attended: number; total: number }>();
         allCoursesData.forEach((course) => {
           const courseSessions = sessionsData.filter((s) => s.courseCode === course.code);
@@ -162,8 +155,8 @@ export default function StudentScreen() {
     fetchData();
   }, []);
 
-  // Helper to get current location
-  const getCurrentLocation = async (): Promise<{ latitude: number; longitude: number } | null> => {
+  // Helper to get current location (updated to handle null accuracy)
+  const getCurrentLocation = async (): Promise<{ latitude: number; longitude: number; accuracy?: number } | null> => {
     if (!locationPermission) {
       Alert.alert("Location Required", "Please enable location permissions to mark attendance.");
       return null;
@@ -171,11 +164,12 @@ export default function StudentScreen() {
     try {
       setGettingLocation(true);
       const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.High,
       });
-      const { latitude, longitude } = location.coords;
+      const { latitude, longitude, accuracy } = location.coords;
       setCurrentLocation({ latitude, longitude });
-      return { latitude, longitude };
+      // Convert null to undefined to match return type
+      return { latitude, longitude, accuracy: accuracy ?? undefined };
     } catch (error) {
       console.error("Error getting location:", error);
       Alert.alert("Location Error", "Could not get your current location. Please try again.");
@@ -185,10 +179,10 @@ export default function StudentScreen() {
     }
   };
 
-  // Process QR data (could be from camera or image)
+  // Process QR data (updated location validation)
   const processQRData = async (qrData: string) => {
     setScanned(true);
-    setScanning(false);
+    setShowCamera(false);
 
     try {
       const parsed = JSON.parse(qrData);
@@ -197,7 +191,6 @@ export default function StudentScreen() {
         return;
       }
 
-      // Fetch session details
       const sessionDoc = await db.collection("sessions").doc(parsed.sessionId).get();
       if (!sessionDoc.exists) {
         Alert.alert("Invalid Session", "This session does not exist.");
@@ -205,7 +198,6 @@ export default function StudentScreen() {
       }
       const session = { id: sessionDoc.id, ...sessionDoc.data() } as Session;
 
-      // Check if already attended
       const existing = await db
         .collection("attendance")
         .where("studentId", "==", auth.currentUser?.uid)
@@ -216,7 +208,6 @@ export default function StudentScreen() {
         return;
       }
 
-      // 1. Time validation
       const now = new Date();
       const sessionStart = new Date(session.dateTime);
       const sessionEnd = new Date(sessionStart.getTime() + session.duration * 60000);
@@ -229,10 +220,9 @@ export default function StudentScreen() {
         return;
       }
 
-      // 2. Location validation (if GPS)
       if (session.location.type === "gps") {
         const studentLocation = await getCurrentLocation();
-        if (!studentLocation) return; // user already alerted
+        if (!studentLocation) return;
 
         const distance = calculateDistance(
           studentLocation.latitude,
@@ -240,21 +230,23 @@ export default function StudentScreen() {
           session.location.latitude!,
           session.location.longitude!
         );
-        const radius = session.location.radius || 100; // default 100m
-        if (distance > radius) {
+
+        const radius = session.location.radius || 200; // default to 200m
+        const accuracy = studentLocation.accuracy || 0;
+        const effectiveRadius = radius + accuracy;
+
+        if (distance > effectiveRadius) {
           Alert.alert(
             "Location Mismatch",
-            `You are ${Math.round(distance)}m away from the class location. Must be within ${radius}m.`
+            `You are ${Math.round(distance)}m away from the class location (GPS accuracy ±${Math.round(accuracy)}m). Must be within ${radius}m.`
           );
           return;
         }
       } else {
-        // Manual location – we can just show a prompt but still mark? For now, require GPS.
         Alert.alert("Location Not Available", "This session does not have GPS coordinates. Cannot verify your location.");
         return;
       }
 
-      // All checks passed – mark attendance
       await db.collection("attendance").add({
         studentId: auth.currentUser!.uid,
         sessionId: session.id,
@@ -262,7 +254,6 @@ export default function StudentScreen() {
       });
       Alert.alert("Success", "Attendance marked successfully");
 
-      // Refresh attendance data
       const newAttendance = await db
         .collection("attendance")
         .where("studentId", "==", auth.currentUser!.uid)
@@ -276,7 +267,7 @@ export default function StudentScreen() {
 
   // Calculate distance in meters (Haversine formula)
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth's radius in meters
+    const R = 6371e3;
     const φ1 = (lat1 * Math.PI) / 180;
     const φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
@@ -292,37 +283,83 @@ export default function StudentScreen() {
 
   // Camera scan handler
   const handleBarCodeScanned = ({ data }: { data: string }) => {
-    processQRData(data);
+    if (!scanned) {
+      processQRData(data);
+    }
+  };
+
+  // Decode QR from image URI (native) – currently limited
+  const decodeQRFromImage = async (uri: string) => {
+    try {
+      const { width, height } = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        RNImage.getSize(uri, (w, h) => resolve({ width: w, height: h }), reject);
+      });
+
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: (FileSystem as any).EncodingType.Base64,
+      });
+
+      Alert.alert('Notice', 'Gallery QR scanning on native devices is currently limited. Please use the camera for best results.');
+    } catch (error) {
+      console.error("Error decoding QR from image:", error);
+      Alert.alert("Error", "Failed to decode QR code from image.");
+    }
   };
 
   // Pick image from gallery
   const pickImage = async () => {
-  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (status !== 'granted') {
-    Alert.alert('Permission required', 'Please grant gallery access to select a QR code image.');
-    return;
-  }
-
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    allowsEditing: false,
-    quality: 1,
-  });
-
-  if (!result.canceled && result.assets[0].uri) {
-    try {
-      const results = await BarCodeScanner.scanFromURLAsync(result.assets[0].uri);
-      if (results && results.length > 0 && results[0].data) {
-        processQRData(results[0].data);
-      } else {
-        Alert.alert("No QR Code", "No QR code found in the selected image.");
-      }
-    } catch (error) {
-      console.error("Error scanning image:", error);
-      Alert.alert("Error", "Failed to scan QR code from image.");
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Please grant gallery access to select a QR code image.');
+      return;
     }
-  }
-};
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      quality: 1,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0].uri) {
+      setGettingLocation(true);
+      try {
+        if (Platform.OS === 'web') {
+          const base64 = result.assets[0].base64;
+          if (!base64) {
+            Alert.alert("Error", "Could not get image data.");
+            return;
+          }
+          const img = new Image();
+          img.src = `data:image/jpeg;base64,${base64}`;
+          await new Promise<void>((resolve) => {
+            img.onload = () => resolve();
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, img.width, img.height);
+            const code = jsQR(imageData.data, img.width, img.height);
+            if (code) {
+              processQRData(code.data);
+            } else {
+              Alert.alert("No QR Code", "No QR code found in the selected image.");
+            }
+          }
+        } else {
+          await decodeQRFromImage(result.assets[0].uri);
+        }
+      } catch (error) {
+        console.error("Error processing image:", error);
+        Alert.alert("Error", "Failed to process image.");
+      } finally {
+        setGettingLocation(false);
+      }
+    }
+  };
 
   const enrollCourse = async (courseId: string) => {
     const user = auth.currentUser;
@@ -335,7 +372,6 @@ export default function StudentScreen() {
         enrolledCourses: firebase.firestore.FieldValue.arrayUnion(courseId),
       });
 
-      // Refresh enrolled courses
       const userDoc = await userRef.get();
       const enrolledIds = userDoc.data()?.enrolledCourses || [];
       const enrolledCoursesData = allCourses.filter((c) => enrolledIds.includes(c.id));
@@ -451,20 +487,10 @@ export default function StudentScreen() {
   };
 
   const renderScanner = () => {
-    if (hasCameraPermission === null || locationPermission === null) {
+    if (locationPermission === null) {
       return (
         <View style={styles.centered}>
-          <Text>Requesting permissions...</Text>
-        </View>
-      );
-    }
-    if (hasCameraPermission === false) {
-      return (
-        <View style={styles.centered}>
-          <Text>No access to camera</Text>
-          <TouchableOpacity style={styles.button} onPress={() => BarCodeScanner.requestPermissionsAsync()}>
-            <Text style={styles.buttonText}>Grant Camera Permission</Text>
-          </TouchableOpacity>
+          <Text>Requesting location permission...</Text>
         </View>
       );
     }
@@ -479,39 +505,63 @@ export default function StudentScreen() {
       );
     }
 
-    return (
-      <View style={styles.scannerFull}>
-        {!scanning ? (
-          <View style={styles.scannerOptions}>
-            <TouchableOpacity style={styles.scannerOption} onPress={() => setScanning(true)}>
-              <Ionicons name="camera-outline" size={40} color="#007AFF" />
-              <Text style={styles.scannerOptionText}>Scan with Camera</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.scannerOption} onPress={pickImage}>
-              <Ionicons name="image-outline" size={40} color="#007AFF" />
-              <Text style={styles.scannerOptionText}>Pick from Gallery</Text>
+    if (showCamera) {
+      if (!cameraPermission || !cameraPermission.granted) {
+        return (
+          <View style={styles.centered}>
+            <Text>Camera permission required</Text>
+            <TouchableOpacity style={styles.button} onPress={requestCameraPermission}>
+              <Text style={styles.buttonText}>Grant Camera Permission</Text>
             </TouchableOpacity>
           </View>
-        ) : (
-          <View style={styles.scannerContainer}>
-            <BarCodeScanner
-              onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
-              style={StyleSheet.absoluteFillObject}
-            />
-            <TouchableOpacity style={styles.closeScanner} onPress={() => setScanning(false)}>
-              <Ionicons name="close" size={30} color="#fff" />
+        );
+      }
+
+      return (
+        <View style={styles.scannerFull}>
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFillObject}
+            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr'],
+            }}
+          />
+          <TouchableOpacity style={styles.closeScanner} onPress={() => setShowCamera(false)}>
+            <Ionicons name="close" size={30} color="#fff" />
+          </TouchableOpacity>
+          {scanned && (
+            <TouchableOpacity style={styles.scanAgain} onPress={() => setScanned(false)}>
+              <Text style={styles.scanAgainText}>Tap to Scan Again</Text>
             </TouchableOpacity>
-            {scanned && (
-              <TouchableOpacity style={styles.scanAgain} onPress={() => setScanned(false)}>
-                <Text style={styles.scanAgainText}>Tap to Scan Again</Text>
-              </TouchableOpacity>
-            )}
-            {gettingLocation && (
-              <View style={styles.locationOverlay}>
-                <ActivityIndicator size="large" color="#fff" />
-                <Text style={styles.locationOverlayText}>Getting your location...</Text>
-              </View>
-            )}
+          )}
+          {gettingLocation && (
+            <View style={styles.locationOverlay}>
+              <ActivityIndicator size="large" color="#fff" />
+              <Text style={styles.locationOverlayText}>Getting your location...</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    // Options: camera or gallery
+    return (
+      <View style={styles.scannerFull}>
+        <View style={styles.scannerOptions}>
+          <TouchableOpacity style={styles.scannerOption} onPress={() => setShowCamera(true)}>
+            <Ionicons name="camera-outline" size={40} color="#007AFF" />
+            <Text style={styles.scannerOptionText}>Scan with Camera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.scannerOption} onPress={pickImage}>
+            <Ionicons name="image-outline" size={40} color="#007AFF" />
+            <Text style={styles.scannerOptionText}>Pick from Gallery</Text>
+          </TouchableOpacity>
+        </View>
+        {gettingLocation && (
+          <View style={styles.locationOverlay}>
+            <ActivityIndicator size="large" color="#fff" />
+            <Text style={styles.locationOverlayText}>Processing...</Text>
           </View>
         )}
       </View>
@@ -528,7 +578,6 @@ export default function StudentScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tab, activeTab === "mycourses" && styles.activeTab]}
@@ -553,7 +602,6 @@ export default function StudentScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Content */}
       {activeTab === "mycourses" && renderMyCourses()}
       {activeTab === "browse" && renderBrowseCourses()}
       {activeTab === "scanner" && renderScanner()}
@@ -721,6 +769,8 @@ const styles = StyleSheet.create({
   scannerOptions: {
     flexDirection: "row",
     gap: 20,
+    flexWrap: "wrap",
+    justifyContent: "center",
   },
   scannerOption: {
     alignItems: "center",
@@ -728,7 +778,7 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: "#f0f0f0",
     borderRadius: 12,
-    minWidth: 120,
+    minWidth: 140,
   },
   scannerOptionText: {
     fontSize: 14,
@@ -736,15 +786,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: "center",
   },
-  scannerContainer: {
-    flex: 1,
-    width: "100%",
-    position: "relative",
-  },
   closeScanner: {
     position: "absolute",
-    top: 10,
-    right: 10,
+    top: 40,
+    right: 20,
     backgroundColor: "rgba(0,0,0,0.6)",
     borderRadius: 20,
     padding: 5,

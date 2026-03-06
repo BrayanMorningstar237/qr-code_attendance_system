@@ -1,5 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from "@react-native-picker/picker";
+import { useNavigation } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system';
 import * as Location from "expo-location";
 import * as MediaLibrary from 'expo-media-library';
@@ -8,24 +10,23 @@ import * as Sharing from "expo-sharing";
 import firebase from "firebase/compat/app";
 import React, { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Platform,
-    RefreshControl,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Platform,
+  RefreshControl,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import ViewShot from "react-native-view-shot";
 import { auth, db } from "../firebase";
 
-// Type definitions
 type Course = {
   id: string;
   code: string;
@@ -45,15 +46,18 @@ type Session = {
 
 export default function TeacherScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const qrCodeRef = useRef<any>(null);
   const viewShotRef = useRef<any>(null);
 
   // Form states
   const [selectedCourse, setSelectedCourse] = useState("");
   const [manualLocation, setManualLocation] = useState("");
-  const [dateTime, setDateTime] = useState("");
+  const [date, setDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [duration, setDuration] = useState("");
-  const [radius, setRadius] = useState("100");
+  const [radius, setRadius] = useState("200");
   const [qrValue, setQrValue] = useState("");
 
   // Location states
@@ -74,6 +78,14 @@ export default function TeacherScreen() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Compute end time
+  const endTime = React.useMemo(() => {
+    if (!duration) return null;
+    const end = new Date(date);
+    end.setMinutes(end.getMinutes() + parseInt(duration) || 0);
+    return end;
+  }, [date, duration]);
 
   // Fetch courses assigned to this teacher
   useEffect(() => {
@@ -179,27 +191,16 @@ export default function TeacherScreen() {
 
   // Generate QR and save session
   const generateQr = async () => {
-    console.log("=== Starting QR generation ===");
-    console.log("Input values:", {
-      selectedCourse,
-      dateTime,
-      duration,
-      useCurrentLocation,
-      manualLocation,
-      radius,
-      currentLocation,
-    });
-
-    if (!selectedCourse || !dateTime || !duration) {
-      console.log("Validation failed: missing required fields");
+    if (!selectedCourse || !date || !duration) {
       Alert.alert("Error", "Please fill all required fields");
       return;
     }
     if (!useCurrentLocation && !manualLocation) {
-      console.log("Validation failed: no location provided");
       Alert.alert("Error", "Please enter a location or use current location");
       return;
     }
+
+    const dateTimeStr = date.toISOString(); // store as ISO string
 
     let locationData;
     if (useCurrentLocation && currentLocation) {
@@ -207,59 +208,48 @@ export default function TeacherScreen() {
         type: "gps",
         latitude: currentLocation.latitude,
         longitude: currentLocation.longitude,
-        radius: parseInt(radius) || 100,
+        radius: parseInt(radius) || 200,
         address: currentLocation.address,
       };
-      console.log("Using GPS location:", locationData);
     } else {
       locationData = {
         type: "manual",
         name: manualLocation,
-        radius: parseInt(radius) || 100,
+        radius: parseInt(radius) || 200,
       };
-      console.log("Using manual location:", locationData);
     }
 
     const user = auth.currentUser;
     if (!user) {
-      console.log("No authenticated user");
       Alert.alert("Error", "You must be logged in");
       return;
     }
-    console.log("Current user UID:", user.uid);
 
     const sessionData = {
       courseCode: selectedCourse,
-      dateTime,
+      dateTime: dateTimeStr,
       duration: parseInt(duration),
       location: locationData,
       teacherId: user.uid,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
-    console.log("Session data to save:", sessionData);
 
     try {
-      console.log("Attempting to save session to Firestore...");
+      console.log("Saving session to Firestore...");
       const docRef = await db.collection("sessions").add(sessionData);
-      console.log("✅ Session saved successfully with ID:", docRef.id);
+      console.log("Session saved with ID:", docRef.id);
 
       const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
       setQrValue(qrPayload);
-      console.log("QR payload generated");
 
       fetchSessions();
     } catch (error: any) {
-      console.error("🔥 Firestore add error:", {
-        code: error.code,
-        message: error.message,
-        stack: error.stack,
-      });
+      console.error("Firestore add error:", error);
       Alert.alert("Error", `Failed to save session: ${error.message}`);
     }
-    console.log("=== QR generation finished ===");
   };
 
-  // Share QR code image (existing)
+  // Share QR code image
   const shareQR = async () => {
     if (!qrValue || !qrCodeRef.current) {
       Alert.alert("Error", "No QR code to share");
@@ -290,7 +280,6 @@ export default function TeacherScreen() {
           return;
         }
 
-        // Web platform
         const blob = await (await fetch(dataURL)).blob();
         const file = new File([blob], `qr_${Date.now()}.png`, { type: 'image/png' });
 
@@ -321,7 +310,6 @@ export default function TeacherScreen() {
     }
   };
 
-  // Helper to get QR as data URL
   const captureQRAsDataURL = (): Promise<string> => {
     return new Promise((resolve) => {
       if (qrCodeRef.current) {
@@ -332,80 +320,73 @@ export default function TeacherScreen() {
     });
   };
 
-  // Download image with QR and details
   const downloadImage = async () => {
-  if (!qrValue || !viewShotRef.current) {
-    Alert.alert("Error", "No QR code to download");
-    return;
-  }
-
-  try {
-    if (Platform.OS !== 'web') {
-      // Native: capture the view and save to gallery
-      const uri = await viewShotRef.current.capture();
-      const permission = await MediaLibrary.requestPermissionsAsync();
-      if (permission.granted) {
-        await MediaLibrary.saveToLibraryAsync(uri);
-        Alert.alert("Success", "Image saved to gallery");
-      } else {
-        Alert.alert("Permission denied", "Cannot save image");
-      }
-    } else {
-      // Web: create a canvas with QR and text, then download
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        Alert.alert("Error", "Could not create canvas context");
-        return;
-      }
-      canvas.width = 400;
-      canvas.height = 500;
-
-      // White background
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Draw text
-      ctx.fillStyle = '#000';
-      ctx.font = 'bold 16px Arial';
-      ctx.fillText('Attendance QR Code', 20, 30);
-      ctx.font = '14px Arial';
-      ctx.fillText(`Course: ${selectedCourse}`, 20, 60);
-      ctx.fillText(`Date & Time: ${dateTime}`, 20, 90);
-      ctx.fillText(`Duration: ${duration} min`, 20, 120);
-      const locationText = `Location: ${
-        useCurrentLocation && currentLocation
-          ? currentLocation.address
-          : manualLocation || 'Not specified'
-      }`;
-      ctx.fillText(locationText, 20, 150);
-      ctx.fillStyle = '#dc3545';
-      ctx.font = 'italic 12px Arial';
-      ctx.fillText(`* Valid only during session time and within ${radius}m.`, 20, 180);
-
-      // Draw QR image
-      const qrImage = new Image();
-      const qrDataUrl = await captureQRAsDataURL();
-      qrImage.src = qrDataUrl;
-      await new Promise((resolve) => {
-        qrImage.onload = () => {
-          ctx.drawImage(qrImage, 100, 200, 200, 200);
-          resolve(null);
-        };
-      });
-
-      // Download
-      const link = document.createElement('a');
-      link.download = `qr_${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-      Alert.alert("Success", "Image downloaded");
+    if (!qrValue || !viewShotRef.current) {
+      Alert.alert("Error", "No QR code to download");
+      return;
     }
-  } catch (error) {
-    console.error("Error downloading image:", error);
-    Alert.alert("Error", "Failed to download image");
-  }
-};
+
+    try {
+      if (Platform.OS !== 'web') {
+        const uri = await viewShotRef.current.capture();
+        const permission = await MediaLibrary.requestPermissionsAsync();
+        if (permission.granted) {
+          await MediaLibrary.saveToLibraryAsync(uri);
+          Alert.alert("Success", "Image saved to gallery");
+        } else {
+          Alert.alert("Permission denied", "Cannot save image");
+        }
+      } else {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          Alert.alert("Error", "Could not create canvas context");
+          return;
+        }
+        canvas.width = 400;
+        canvas.height = 500;
+
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText('Attendance QR Code', 20, 30);
+        ctx.font = '14px Arial';
+        ctx.fillText(`Course: ${selectedCourse}`, 20, 60);
+        ctx.fillText(`Date & Time: ${date.toLocaleString()}`, 20, 90);
+        ctx.fillText(`Duration: ${duration} min`, 20, 120);
+        const locationText = `Location: ${
+          useCurrentLocation && currentLocation
+            ? currentLocation.address
+            : manualLocation || 'Not specified'
+        }`;
+        ctx.fillText(locationText, 20, 150);
+        ctx.fillStyle = '#dc3545';
+        ctx.font = 'italic 12px Arial';
+        ctx.fillText(`* Valid until ${endTime?.toLocaleTimeString()}`, 20, 180);
+
+        const qrImage = new Image();
+        const qrDataUrl = await captureQRAsDataURL();
+        qrImage.src = qrDataUrl;
+        await new Promise((resolve) => {
+          qrImage.onload = () => {
+            ctx.drawImage(qrImage, 100, 200, 200, 200);
+            resolve(null);
+          };
+        });
+
+        const link = document.createElement('a');
+        link.download = `qr_${Date.now()}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        Alert.alert("Success", "Image downloaded");
+      }
+    } catch (error) {
+      console.error("Error downloading image:", error);
+      Alert.alert("Error", "Failed to download image");
+    }
+  };
 
   const renderSessionItem = ({ item }: { item: Session }) => (
     <View style={styles.sessionItem}>
@@ -413,12 +394,11 @@ export default function TeacherScreen() {
         <Text style={styles.sessionCourse}>{item.courseCode}</Text>
       </View>
       <Text style={styles.sessionDetails}>
-        {item.dateTime} • {item.location?.address || item.location?.name || "Unknown location"}
+        {new Date(item.dateTime).toLocaleString()} • {item.location?.address || item.location?.name || "Unknown location"}
       </Text>
     </View>
   );
 
-  // Custom view containing QR and details for capture
   const InfoImageView = () => {
     if (!qrValue) return null;
     return (
@@ -427,13 +407,13 @@ export default function TeacherScreen() {
         <View style={styles.infoTextContainer}>
           <Text style={styles.infoTitle}>Attendance QR Code</Text>
           <Text style={styles.infoText}>Course: {selectedCourse}</Text>
-          <Text style={styles.infoText}>Date & Time: {dateTime}</Text>
+          <Text style={styles.infoText}>Date & Time: {date.toLocaleString()}</Text>
           <Text style={styles.infoText}>Duration: {duration} minutes</Text>
           <Text style={styles.infoText}>
             Location: {useCurrentLocation && currentLocation ? currentLocation.address : manualLocation}
           </Text>
           <Text style={styles.infoCondition}>
-            * Valid only during the scheduled time and within {radius}m of the location.
+            * Valid until {endTime?.toLocaleTimeString()}
           </Text>
         </View>
       </View>
@@ -452,9 +432,15 @@ export default function TeacherScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-  <Ionicons name="arrow-back" size={24} color="#333" />
-</TouchableOpacity>
+          <TouchableOpacity onPress={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              router.replace('/login');
+            }
+          }}>
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>Teacher Dashboard</Text>
           <View style={{ width: 24 }} />
         </View>
@@ -470,7 +456,13 @@ export default function TeacherScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => {
+          if (navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            router.replace('/login');
+          }
+        }}>
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Teacher Dashboard</Text>
@@ -504,24 +496,53 @@ export default function TeacherScreen() {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Date & Time</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="2025-03-06 10:00"
-              value={dateTime}
-              onChangeText={setDateTime}
-            />
+            <Text style={styles.label}>Date</Text>
+            <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.pickerButton}>
+              <Text>{date.toDateString()}</Text>
+            </TouchableOpacity>
+            {showDatePicker && (
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display="default"
+                onChange={(event, selectedDate) => {
+                  setShowDatePicker(false);
+                  if (selectedDate) setDate(selectedDate);
+                }}
+              />
+            )}
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Time</Text>
+            <TouchableOpacity onPress={() => setShowTimePicker(true)} style={styles.pickerButton}>
+              <Text>{date.toLocaleTimeString()}</Text>
+            </TouchableOpacity>
+            {showTimePicker && (
+              <DateTimePicker
+                value={date}
+                mode="time"
+                display="default"
+                onChange={(event, selectedTime) => {
+                  setShowTimePicker(false);
+                  if (selectedTime) setDate(selectedTime);
+                }}
+              />
+            )}
           </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Duration (minutes)</Text>
             <TextInput
               style={styles.input}
-              placeholder="90"
+              placeholder="120"
               value={duration}
               onChangeText={setDuration}
               keyboardType="numeric"
             />
+            {endTime && (
+              <Text style={styles.hint}>Session ends at {endTime.toLocaleTimeString()}</Text>
+            )}
           </View>
 
           {/* Location Options */}
@@ -532,11 +553,7 @@ export default function TeacherScreen() {
                 style={[styles.toggleButton, useCurrentLocation && styles.toggleButtonActive]}
                 onPress={() => setUseCurrentLocation(true)}
               >
-                <Ionicons
-                  name="locate"
-                  size={20}
-                  color={useCurrentLocation ? "#fff" : "#007AFF"}
-                />
+                <Ionicons name="locate" size={20} color={useCurrentLocation ? "#fff" : "#007AFF"} />
                 <Text style={[styles.toggleText, useCurrentLocation && styles.toggleTextActive]}>
                   Current Location
                 </Text>
@@ -593,7 +610,7 @@ export default function TeacherScreen() {
             <Text style={styles.label}>Verification Radius (meters)</Text>
             <TextInput
               style={styles.input}
-              placeholder="100"
+              placeholder="200"
               value={radius}
               onChangeText={setRadius}
               keyboardType="numeric"
@@ -626,7 +643,6 @@ export default function TeacherScreen() {
           ) : null}
         </View>
 
-        {/* Previous Sessions */}
         <View style={styles.historySection}>
           <Text style={styles.sectionTitle}>Previous Sessions</Text>
           {loadingSessions ? (
@@ -721,6 +737,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+    borderWidth: 1,
+    borderColor: "#ddd",
+  },
+  pickerButton: {
+    backgroundColor: "#f9f9f9",
+    borderRadius: 8,
+    padding: 12,
     borderWidth: 1,
     borderColor: "#ddd",
   },
