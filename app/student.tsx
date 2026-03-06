@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from '@react-navigation/native'; // added for back button
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -56,6 +57,7 @@ type Attendance = {
 
 export default function StudentScreen() {
   const router = useRouter();
+  const navigation = useNavigation(); // added
   const [activeTab, setActiveTab] = useState<Tab>("mycourses");
   const [loading, setLoading] = useState(false);
 
@@ -131,19 +133,6 @@ export default function StudentScreen() {
           ...doc.data(),
         })) as Session[];
         setSessions(sessionsData);
-
-        const stats = new Map<string, { attended: number; total: number }>();
-        allCoursesData.forEach((course) => {
-          const courseSessions = sessionsData.filter((s) => s.courseCode === course.code);
-          const total = courseSessions.length;
-          const attended = attendanceData.filter((a) =>
-            courseSessions.some((s) => s.id === a.sessionId)
-          ).length;
-          if (enrolledIds.includes(course.id)) {
-            stats.set(course.id, { attended, total });
-          }
-        });
-        setCourseStats(stats);
       } catch (error) {
         console.error("Error fetching data:", error);
         Alert.alert("Error", "Failed to load data");
@@ -154,6 +143,20 @@ export default function StudentScreen() {
 
     fetchData();
   }, []);
+
+  // Recompute course stats when relevant data changes
+  useEffect(() => {
+    const stats = new Map<string, { attended: number; total: number }>();
+    enrolledCourses.forEach((course) => {
+      const courseSessions = sessions.filter((s) => s.courseCode === course.code);
+      const total = courseSessions.length;
+      const attended = attendance.filter((a) =>
+        courseSessions.some((s) => s.id === a.sessionId)
+      ).length;
+      stats.set(course.id, { attended, total });
+    });
+    setCourseStats(stats);
+  }, [enrolledCourses, attendance, sessions]);
 
   // Helper to get current location (updated to handle null accuracy)
   const getCurrentLocation = async (): Promise<{ latitude: number; longitude: number; accuracy?: number } | null> => {
@@ -254,6 +257,7 @@ export default function StudentScreen() {
       });
       Alert.alert("Success", "Attendance marked successfully");
 
+      // Refresh attendance data
       const newAttendance = await db
         .collection("attendance")
         .where("studentId", "==", auth.currentUser!.uid)
@@ -571,7 +575,13 @@ export default function StudentScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => {
+          if (navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            router.replace('/login');
+          }
+        }}>
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Student Dashboard</Text>

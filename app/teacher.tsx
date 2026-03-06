@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Platform,
   RefreshControl,
   SafeAreaView,
@@ -44,6 +45,14 @@ type Session = {
   createdAt: any;
 };
 
+type Student = {
+  id: string;
+  name: string;
+  email: string;
+  matricule?: string;
+  enrolledCourses?: string[];
+};
+
 export default function TeacherScreen() {
   const router = useRouter();
   const navigation = useNavigation();
@@ -59,6 +68,14 @@ export default function TeacherScreen() {
   const [duration, setDuration] = useState("");
   const [radius, setRadius] = useState("200");
   const [qrValue, setQrValue] = useState("");
+
+  // Validation errors
+  const [errors, setErrors] = useState({
+    course: false,
+    date: false,
+    duration: false,
+    location: false,
+  });
 
   // Location states
   const [useCurrentLocation, setUseCurrentLocation] = useState(false);
@@ -79,6 +96,11 @@ export default function TeacherScreen() {
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Report modal
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [selectedReportCourse, setSelectedReportCourse] = useState('');
+  const [generatingReport, setGeneratingReport] = useState(false);
+
   // Compute end time
   const endTime = React.useMemo(() => {
     if (!duration) return null;
@@ -86,6 +108,25 @@ export default function TeacherScreen() {
     end.setMinutes(end.getMinutes() + parseInt(duration) || 0);
     return end;
   }, [date, duration]);
+
+  // Clear a specific error when field is filled
+  useEffect(() => {
+    if (selectedCourse) setErrors(prev => ({ ...prev, course: false }));
+  }, [selectedCourse]);
+
+  useEffect(() => {
+    if (date) setErrors(prev => ({ ...prev, date: false }));
+  }, [date]);
+
+  useEffect(() => {
+    if (duration) setErrors(prev => ({ ...prev, duration: false }));
+  }, [duration]);
+
+  useEffect(() => {
+    if ((useCurrentLocation && currentLocation) || (!useCurrentLocation && manualLocation)) {
+      setErrors(prev => ({ ...prev, location: false }));
+    }
+  }, [useCurrentLocation, currentLocation, manualLocation]);
 
   // Fetch courses assigned to this teacher
   useEffect(() => {
@@ -189,18 +230,29 @@ export default function TeacherScreen() {
     }
   };
 
+  // Validate form before generating QR
+  const validateForm = () => {
+    const newErrors = {
+      course: !selectedCourse,
+      date: !date,
+      duration: !duration,
+      location: (useCurrentLocation && !currentLocation) || (!useCurrentLocation && !manualLocation),
+    };
+    setErrors(newErrors);
+    return !Object.values(newErrors).some(v => v);
+  };
+
   // Generate QR and save session
   const generateQr = async () => {
-    if (!selectedCourse || !date || !duration) {
+    console.log("=== Starting QR generation ===");
+
+    if (!validateForm()) {
+      console.log("Validation failed");
       Alert.alert("Error", "Please fill all required fields");
       return;
     }
-    if (!useCurrentLocation && !manualLocation) {
-      Alert.alert("Error", "Please enter a location or use current location");
-      return;
-    }
 
-    const dateTimeStr = date.toISOString(); // store as ISO string
+    const dateTimeStr = date.toISOString();
 
     let locationData;
     if (useCurrentLocation && currentLocation) {
@@ -241,6 +293,7 @@ export default function TeacherScreen() {
 
       const qrPayload = JSON.stringify({ sessionId: docRef.id, ...sessionData });
       setQrValue(qrPayload);
+      console.log("QR payload generated");
 
       fetchSessions();
     } catch (error: any) {
@@ -388,6 +441,112 @@ export default function TeacherScreen() {
     }
   };
 
+  // Logout handler
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+      router.replace('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout');
+    }
+  };
+
+  // Generate attendance report for selected course
+  const generateReport = async () => {
+    if (!selectedReportCourse) {
+      Alert.alert('Error', 'Please select a course');
+      return;
+    }
+    setGeneratingReport(true);
+    try {
+      const course = courses.find(c => c.code === selectedReportCourse);
+      if (!course) throw new Error('Course not found');
+
+      // Get all students enrolled in this course
+      const studentsSnapshot = await db.collection('users')
+        .where('role', '==', 'student')
+        .where('enrolledCourses', 'array-contains', course.id)
+        .get();
+      const students = studentsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Student[];
+
+      if (students.length === 0) {
+        Alert.alert('No Students', 'No students are enrolled in this course.');
+        setGeneratingReport(false);
+        return;
+      }
+
+      // Get all sessions for this course (past and future)
+      const sessionsSnapshot = await db.collection('sessions')
+        .where('courseCode', '==', selectedReportCourse)
+        .orderBy('dateTime', 'asc')
+        .get();
+      const sessions = sessionsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Session[];
+
+      if (sessions.length === 0) {
+        Alert.alert('No Sessions', 'No sessions have been created for this course.');
+        setGeneratingReport(false);
+        return;
+      }
+
+      // Get all attendance records for these sessions
+      const sessionIds = sessions.map(s => s.id);
+      let attendance: any[] = [];
+      if (sessionIds.length > 0) {
+        // Firestore 'in' query supports up to 10 values; if more, we need to chunk.
+        // For simplicity, we assume <=10 sessions. Otherwise, we'd need to batch.
+        const attendanceSnapshot = await db.collection('attendance')
+          .where('sessionId', 'in', sessionIds.slice(0, 10))
+          .get();
+        attendance = attendanceSnapshot.docs.map(doc => doc.data());
+      }
+
+      // Build CSV
+      let csv = 'Student Name,Matricule,Email';
+      sessions.forEach(s => {
+        const date = new Date(s.dateTime).toLocaleDateString();
+        csv += `,${date}`;
+      });
+      csv += '\n';
+
+      students.forEach(student => {
+        const name = student.name || '';
+        const matricule = student.matricule || '';
+        const email = student.email || '';
+        let row = `"${name.replace(/"/g, '""')}",${matricule},${email}`;
+
+        sessions.forEach(session => {
+          const attended = attendance.some(a => a.studentId === student.id && a.sessionId === session.id);
+          row += `,${attended ? 'Present' : 'Absent'}`;
+        });
+        csv += row + '\n';
+      });
+
+      // Save to file and share
+      const fileUri = (FileSystem as any).documentDirectory + `attendance_${course.code}_${Date.now()}.csv`;
+      await (FileSystem as any).writeAsStringAsync(fileUri, csv, {
+        encoding: (FileSystem as any).EncodingType.UTF8,
+      });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', dialogTitle: 'Export Attendance' });
+      } else {
+        Alert.alert('Sharing not available', 'Cannot share file');
+      }
+    } catch (error) {
+      console.error('Error generating report:', error);
+      Alert.alert('Error', 'Failed to generate report');
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
   const renderSessionItem = ({ item }: { item: Session }) => (
     <View style={styles.sessionItem}>
       <View style={styles.sessionHeader}>
@@ -442,7 +601,14 @@ export default function TeacherScreen() {
             <Ionicons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Teacher Dashboard</Text>
-          <View style={{ width: 24 }} />
+          <View style={styles.headerRight}>
+            <TouchableOpacity onPress={() => setReportModalVisible(true)} style={{ marginRight: 15 }}>
+              <Ionicons name="document-text-outline" size={24} color="#007AFF" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleLogout}>
+              <Ionicons name="exit-outline" size={24} color="#FF3B30" />
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={styles.emptyContainer}>
           <Ionicons name="school-outline" size={60} color="#ccc" />
@@ -466,7 +632,14 @@ export default function TeacherScreen() {
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Teacher Dashboard</Text>
-        <View style={{ width: 24 }} />
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={() => setReportModalVisible(true)} style={{ marginRight: 15 }}>
+            <Ionicons name="document-text-outline" size={24} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLogout}>
+            <Ionicons name="exit-outline" size={24} color="#FF3B30" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -476,9 +649,10 @@ export default function TeacherScreen() {
         <View style={styles.formCard}>
           <Text style={styles.formTitle}>Generate New QR</Text>
 
+          {/* Course Picker */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Course</Text>
-            <View style={styles.pickerContainer}>
+            <View style={[styles.pickerContainer, errors.course && styles.errorBorder]}>
               <Picker
                 selectedValue={selectedCourse}
                 onValueChange={(itemValue) => setSelectedCourse(itemValue)}
@@ -493,11 +667,16 @@ export default function TeacherScreen() {
                 ))}
               </Picker>
             </View>
+            {errors.course && <Text style={styles.errorText}>Please select a course</Text>}
           </View>
 
+          {/* Date Picker */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Date</Text>
-            <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.pickerButton}>
+            <TouchableOpacity 
+              onPress={() => setShowDatePicker(true)} 
+              style={[styles.pickerButton, errors.date && styles.errorBorder]}
+            >
               <Text>{date.toDateString()}</Text>
             </TouchableOpacity>
             {showDatePicker && (
@@ -511,11 +690,16 @@ export default function TeacherScreen() {
                 }}
               />
             )}
+            {errors.date && <Text style={styles.errorText}>Please select a date</Text>}
           </View>
 
+          {/* Time Picker */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Time</Text>
-            <TouchableOpacity onPress={() => setShowTimePicker(true)} style={styles.pickerButton}>
+            <TouchableOpacity 
+              onPress={() => setShowTimePicker(true)} 
+              style={[styles.pickerButton, errors.date && styles.errorBorder]}
+            >
               <Text>{date.toLocaleTimeString()}</Text>
             </TouchableOpacity>
             {showTimePicker && (
@@ -529,18 +713,21 @@ export default function TeacherScreen() {
                 }}
               />
             )}
+            {errors.date && <Text style={styles.errorText}>Please select a time</Text>}
           </View>
 
+          {/* Duration */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Duration (minutes)</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, errors.duration && styles.errorBorder]}
               placeholder="120"
               value={duration}
               onChangeText={setDuration}
               keyboardType="numeric"
             />
-            {endTime && (
+            {errors.duration && <Text style={styles.errorText}>Please enter duration</Text>}
+            {endTime && !errors.duration && (
               <Text style={styles.hint}>Session ends at {endTime.toLocaleTimeString()}</Text>
             )}
           </View>
@@ -570,7 +757,7 @@ export default function TeacherScreen() {
             </View>
 
             {useCurrentLocation ? (
-              <View style={styles.currentLocationBox}>
+              <View style={[styles.currentLocationBox, errors.location && styles.errorBorder]}>
                 {currentLocation ? (
                   <View style={styles.locationInfo}>
                     <Ionicons name="checkmark-circle" size={24} color="#28a745" />
@@ -596,12 +783,19 @@ export default function TeacherScreen() {
                 {locationStatus ? <Text style={styles.locationStatus}>{locationStatus}</Text> : null}
               </View>
             ) : (
-              <TextInput
-                style={styles.input}
-                placeholder="e.g., Room 203, Hall A"
-                value={manualLocation}
-                onChangeText={setManualLocation}
-              />
+              <>
+                <TextInput
+                  style={[styles.input, errors.location && styles.errorBorder]}
+                  placeholder="e.g., Room 203, Hall A"
+                  value={manualLocation}
+                  onChangeText={setManualLocation}
+                />
+              </>
+            )}
+            {errors.location && (
+              <Text style={styles.errorText}>
+                {useCurrentLocation ? 'Please get current location' : 'Please enter a location'}
+              </Text>
             )}
           </View>
 
@@ -659,6 +853,48 @@ export default function TeacherScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Report Modal */}
+      <Modal visible={reportModalVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Export Attendance</Text>
+            <Text style={styles.modalLabel}>Select Course</Text>
+            <View style={styles.pickerContainer}>
+              <Picker
+                selectedValue={selectedReportCourse}
+                onValueChange={(itemValue) => setSelectedReportCourse(itemValue)}
+              >
+                <Picker.Item label="Choose a course" value="" />
+                {courses.map((course) => (
+                  <Picker.Item
+                    key={course.id}
+                    label={`${course.code} - ${course.name}`}
+                    value={course.code}
+                  />
+                ))}
+              </Picker>
+            </View>
+            <TouchableOpacity
+              style={styles.generateButton}
+              onPress={generateReport}
+              disabled={generatingReport}
+            >
+              {generatingReport ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.generateButtonText}>Generate CSV</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => setReportModalVisible(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -687,6 +923,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "600",
     color: "#333",
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   emptyContainer: {
     flex: 1,
@@ -757,6 +997,15 @@ const styles = StyleSheet.create({
   picker: {
     height: 50,
     width: "100%",
+  },
+  errorBorder: {
+    borderColor: "#dc3545",
+    borderWidth: 2,
+  },
+  errorText: {
+    color: "#dc3545",
+    fontSize: 12,
+    marginTop: 4,
   },
   hint: {
     fontSize: 12,
@@ -963,5 +1212,45 @@ const styles = StyleSheet.create({
     color: "#999",
     fontSize: 16,
     marginTop: 20,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    width: "90%",
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  modalLabel: {
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    marginHorizontal: 6,
+  },
+  cancelButton: {
+    backgroundColor: "#f0f0f0",
+    marginTop: 12,
+  },
+  cancelButtonText: {
+    color: "#666",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });
